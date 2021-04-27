@@ -1,0 +1,93 @@
+
+import pandas as pd
+import win32com.client
+import datetime as dt
+import zipfile
+import os
+
+
+## Change Directory
+os.chdir(r'') # insert path
+
+## Connect to existing outlook session, create email filtering criteria, parse emails, and decompress zipfiles to read CSV contents directly into Conda Environment
+
+outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+inbox = outlook.GetDefaultFolder(6) 
+messages = inbox.Items
+today = dt.date.today()
+date = dt.timedelta(31)
+
+for message in messages:
+    if message.SenderEmailAddress == "USABSPRICING@markit.com" and (dt.datetime.strptime((str.split(str(message.SentOn)," ")[0]),"%Y-%m-%d")<=dt.datetime.combine(today, dt.datetime.min.time()) 
+    and dt.datetime.strptime((str.split(str(message.SentOn)," ")[0]),"%Y-%m-%d")>=dt.datetime.combine((today-date), dt.datetime.min.time())):
+        for att in message.Attachments:
+            att.SaveAsFile(os.getcwd() + "\\" + att.FileName)
+            #zipfile.ZipFile(StringIO(att.GetTemporaryFilePath.read()),'r')
+
+compressionfiles = []
+for i in sorted(os.listdir(os.getcwd()),reverse=True):
+    if 'Tolis_Advisors_' in i:
+        compressionfiles.append(i)
+
+raw_data = []
+for i in compressionfiles:
+    raw_data.append(pd.read_csv(zipfile.ZipFile(i).open(zipfile.ZipFile(i).infolist()[0].filename),header=1)[['CUSIP','Deal Name','Price Bid']])
+
+## Create list of Dataframes and build historical database
+
+indices_df = []
+for i in range(len(raw_data)):
+    indices_df.append(raw_data[i].set_index(['CUSIP','Deal Name']))
+
+construct_df = pd.DataFrame(raw_data[0][['CUSIP','Deal Name']])
+construct_df = construct_df.set_index(['CUSIP','Deal Name'])
+
+for i in range(len(indices_df)):
+    construct_df = pd.merge(construct_df,indices_df[i],how='left',left_index=True,right_index=True)
+
+## Clean up dataframe attributes and format
+
+date_parsed=[]
+for i in range(len(compressionfiles)):
+    date_parsed.append(str.split(compressionfiles[i],'_')[2])
+ 
+construct_df.columns = date_parsed 
+
+calc_df = construct_df.copy(deep=True)
+calc_df = calc_df.iloc[:,[0,1]]
+calc_df['Variance']= calc_df[calc_df.columns[0]]-calc_df[calc_df.columns[1]]
+
+
+## Write to excel
+
+excelwriter = pd.ExcelWriter('Markit Pricing Tracker - '+dt.datetime.today().strftime('%m-%d-%Y')+'.xlsx')
+calc_df.to_excel(excelwriter,'Variance Analysis')
+construct_df.to_excel(excelwriter,'Historical Data')
+worksheetone = excelwriter.sheets['Variance Analysis']
+worksheettwo = excelwriter.sheets['Historical Data']
+worksheetone.set_column('A:A',14)
+worksheetone.set_column('B:B',80)
+worksheetone.set_column('C:E',15)
+worksheettwo.set_column('A:A',14)
+worksheettwo.set_column('B:B',80)
+worksheettwo.set_column('C:BQ',15)
+worksheetone.freeze_panes(1,1)
+worksheettwo.freeze_panes(1,1)
+excelwriter.save()
+excelwriter.close()
+
+
+## Send automated email with attachment to team
+
+olMailItem = 0x0
+outlook = win32com.client.gencache.EnsureDispatch("Outlook.Application").GetNamespace("MAPI")
+#print(dir(outlook))
+outlook = win32com.client.Dispatch("Outlook.Application")
+newmail = outlook.CreateItem(olMailItem)
+newmail.To = "" #insert emails
+newmail.Subject = "Markit Pricing Tracker"
+newmail.HTMLBody = "Hi Team, <br><br>Please see attached today's Markit Pricing Analysis. <br><br>"
+newmail.Attachments.Add(Source = r'' +'\Markit Pricing Tracker - '+dt.datetime.today().strftime('%m-%d-%Y')+'.xlsx') #add path to source for output directory
+newmail.Send()
+
+
